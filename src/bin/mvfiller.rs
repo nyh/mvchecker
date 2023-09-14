@@ -1,4 +1,4 @@
-use scylla::{IntoTypedRows, Session, SessionBuilder};
+use scylla::{Session, SessionBuilder};
 use std::error::Error;
 
 #[tokio::main]
