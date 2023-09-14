@@ -5,7 +5,7 @@
 // Usage: mvcheck [node_address[:nodeport]]
 
 use futures::StreamExt;
-use scylla::{SessionBuilder, host_filter};
+use scylla::SessionBuilder;
 use scylla::statement::Consistency;
 use scylla::transport::topology::Keyspace;
 use scylla::transport::host_filter::AllowListHostFilter;
