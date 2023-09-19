@@ -1,3 +1,6 @@
+// Fill some sample data for mvchecker to check.
+// Run as: cargo run --bin mvfiller
+
 use scylla::{Session, SessionBuilder};
 use std::error::Error;
 

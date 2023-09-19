@@ -70,16 +70,25 @@ async fn find_internal_address(node: &str) -> String {
     return node.to_string();
 }
 
+#[derive(Debug)]
+struct ViewDescription {
+    name: String,
+    partition_key: Vec<String>
+}
 
 /// Make a list of tables in the given keyspace that have materialized views,
 /// with the list of views for each.
-fn find_tables_with_views(keyspace_info: &Keyspace) -> HashMap<String, Vec<String>> {
+fn find_tables_with_views(keyspace_info: &Keyspace) -> HashMap<String, Vec<ViewDescription>> {
     let mut tables_with_views = HashMap::new();
     for (view_name, view) in &keyspace_info.views {
+        // TODO: view.view_metdata is a Table object with the definition of the view
         let base_table = &view.base_table_name;
         tables_with_views
             .entry(base_table.clone()).or_insert_with(Vec::new)
-            .push(view_name.clone());
+            .push(ViewDescription {
+                name: view_name.clone(),
+                partition_key: view.view_metadata.partition_key.clone()
+            });
     }
     tables_with_views
 }
@@ -123,15 +132,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for (keyspace_name, keyspace_info) in cluster_data.get_keyspace_info() {
         let tables_with_views = find_tables_with_views(keyspace_info);
 
-        // TODO: view.view_metdata is a Table object with the definition of the view
-
         // If there are no views in this keyspace, we can skip it entirely
         if tables_with_views.is_empty() {
             continue;
         }
 
-
-        let only_primary_range = true; //false;
+        let only_primary_range = false;
         let ranges = find_token_ranges(only_primary_range, &keyspace_name, &node).await;
         println!("Found {} ranges", &ranges.len());
 
