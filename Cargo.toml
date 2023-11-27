@@ -16,3 +16,4 @@ num-bigint = "0.3"
 tracing = "0.1.36"
 tracing-subscriber = { version = "0.3.14", features = ["env-filter"] }
 reqwest = { version = "0.11", features = ["json"] }
+itertools = "0.11.0"

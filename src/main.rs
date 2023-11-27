@@ -7,12 +7,13 @@
 use futures::StreamExt;
 use scylla::{SessionBuilder, Session};
 use scylla::statement::Consistency;
-use scylla::transport::topology::Keyspace;
+use scylla::transport::topology::{Keyspace, ColumnKind};
 use scylla::transport::host_filter::AllowListHostFilter;
 use std::error::Error;
 use std::collections::HashMap;
 use std::vec::Vec;
 use std::sync::Arc;
+use itertools::Itertools;
 
 /// Find token ranges that according to this keyspace's replication
 /// strategy, belong to the given node.
@@ -73,7 +74,14 @@ async fn find_internal_address(node: &str) -> String {
 #[derive(Debug)]
 struct ViewDescription {
     name: String,
-    partition_key: Vec<String>
+    // We need to know the view's primary key columns (partition key and
+    // clustering key) to find the view row's key from a base-table row.
+    // We also need the view's SELECTed regular columns, to build the
+    // full expected view row from a base tabel row.
+    // 
+    partition_key: Vec<String>,
+    clustering_key: Vec<String>,
+    selected_regular_columns: Vec<String>,
 }
 
 /// Make a list of tables in the given keyspace that have materialized views,
@@ -83,11 +91,16 @@ fn find_tables_with_views(keyspace_info: &Keyspace) -> HashMap<String, Vec<ViewD
     for (view_name, view) in &keyspace_info.views {
         // TODO: view.view_metdata is a Table object with the definition of the view
         let base_table = &view.base_table_name;
+        let selected_regular_columns = view.view_metadata.columns.iter()
+            .filter(|&(k, v)| v.kind == ColumnKind::Regular)
+            .map(|(k, v)| k.clone()).collect();
         tables_with_views
             .entry(base_table.clone()).or_insert_with(Vec::new)
             .push(ViewDescription {
                 name: view_name.clone(),
-                partition_key: view.view_metadata.partition_key.clone()
+                partition_key: view.view_metadata.partition_key.clone(),
+                clustering_key: view.view_metadata.clustering_key.clone(),
+                selected_regular_columns: selected_regular_columns
             });
     }
     tables_with_views
@@ -184,11 +197,51 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     (None, Some(e)) => single_node_session.execute_iter(prepared_left.clone(), (e,)).await?,
                     _ => panic!()
                 };
-                while let Some(next_row) = rows_stream.next().await {
+                // When we read a "Row" from the base table, it just has
+                // a list of values. To understand which value relates to
+                // which column, we build the column index, giving the
+                // numeric index into the row given a column name.
+                let mut base_scan_column_index = HashMap::new();
+                for (i, cs) in rows_stream.get_column_specs().iter().enumerate() {
+                    base_scan_column_index.insert(cs.name.clone(), i);
+                }
+                while let Some(Ok(next_row)) = rows_stream.next().await {
                     //.into_typed::<(i32, i32)>();
                     //let (a, b): (i32, i32) = next_row_res?;
                     //println!("a, b: {}, {}", a, b);
                     println!("{:?}", next_row);
+                    // Compare this base row to each of the views
+                    // TODO: get each view's partition key from the values in
+                    // this base row, and calculate view token to know from which
+                    // node to read.
+                    // NYH CONTINUE HERE: read the view row (we need the full
+                    // primary key for that)
+                    for view in views {
+                        println!("checking view {:?}", view);
+                        let mut where_clause: String = " WHERE ".to_string();
+                        // TODO: quote if needed the partition key k.
+                        where_clause.push_str(
+                            view.partition_key.iter().map(|k| k.to_string() + "=?").join(" AND ").as_str());
+                        print!("{:?}", where_clause);
+
+                        // CONTINUE HERE: The value:
+                        //where_clause.push_str(next_row.columns[base_scan_column_index[k]])
+
+                        // Unfortunately, session.query() can't take an
+                        // iterator of CqlValue. We need to make it into a
+                        // slice.
+                        let mut bound_values = Vec::new();
+                        for k in &view.partition_key {
+                            bound_values.push(&next_row.columns[base_scan_column_index[k]]);
+                        }
+                        // TODO: select only the view's list of columns, not "*"
+                        session.query(
+                            "SELECT * FROM ".to_string() + &keyspace_name + "." + &view.name
+                            + &where_clause,
+                            bound_values
+                        ).await?;
+                        //    view.partition_key.iter().map(|k| next_row.columns[base_scan_column_index[k]])
+                    }
                 }
             }
 
